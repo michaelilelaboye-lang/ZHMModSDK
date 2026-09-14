@@ -14,6 +14,7 @@
 #include <Glacier/SExternalReferences.h>
 
 #include <Util/ImGuiUtils.h>
+#include <cmath>
 
 #undef min
 
@@ -363,22 +364,93 @@ void Player::OnDrawUI(const bool p_HasFocus) {
             }
         }
 
-        if (ImGui::Button("Teleport all actors to player")) {
-            const auto s_HitmanSpatialEntity = s_LocalHitman.m_entityRef.QueryInterface<ZSpatialEntity>();
+        static int s_ActorCount = 50;
+static float s_SpreadRadius = 5.0f;
 
-            for (size_t i = 0; i < *Globals::NextActorId; ++i) {
-                ZActor* s_Actor = Globals::ActorManager->m_activatedActors[i].m_pInterfaceRef;
-                ZEntityRef s_Ref;
+// Number of NPCs
+ImGui::InputInt("Number of actors", &s_ActorCount, 1, 10);
 
-                s_Actor->GetID(s_Ref);
+// Radius around 47
+ImGui::InputFloat("Spread radius", &s_SpreadRadius, 0.5f, 1.0f, "%.1f m");
 
-                ZSpatialEntity* s_ActorSpatialEntity = s_Ref.QueryInterface<ZSpatialEntity>();
+// Prevent bad values
+if (s_ActorCount < 1)
+    s_ActorCount = 1;
 
-                s_ActorSpatialEntity->SetObjectToWorldMatrixFromEditor(
-                    s_HitmanSpatialEntity->GetObjectToWorldMatrix()
-                );
-            }
+if (s_ActorCount > 500)
+    s_ActorCount = 500;
+
+if (s_SpreadRadius < 0.5f)
+    s_SpreadRadius = 0.5f;
+
+
+if (ImGui::Button("Teleport actors to player")) {
+
+    const auto s_HitmanSpatialEntity =
+        s_LocalHitman.m_entityRef.QueryInterface<ZSpatialEntity>();
+
+    if (s_HitmanSpatialEntity) {
+
+        // Get 47's current position/rotation
+        const auto s_PlayerTransform =
+            s_HitmanSpatialEntity->GetObjectToWorldMatrix();
+
+        int s_Teleported = 0;
+
+        // Used to distribute NPCs evenly
+        constexpr float s_GoldenAngle = 2.39996323f;
+
+        for (
+            size_t i = 0;
+            i < *Globals::NextActorId &&
+            s_Teleported < s_ActorCount;
+            ++i
+        ) {
+            ZActor* s_Actor =
+                Globals::ActorManager->m_activatedActors[i].m_pInterfaceRef;
+
+            if (!s_Actor)
+                continue;
+
+            ZEntityRef s_Ref;
+            s_Actor->GetID(s_Ref);
+
+            ZSpatialEntity* s_ActorSpatialEntity =
+                s_Ref.QueryInterface<ZSpatialEntity>();
+
+            if (!s_ActorSpatialEntity)
+                continue;
+
+            // Start with 47's transform
+            auto s_NewTransform = s_PlayerTransform;
+
+            // Work out where this NPC should be placed
+            const float s_NormalizedIndex =
+                (static_cast<float>(s_Teleported) + 0.5f) /
+                static_cast<float>(s_ActorCount);
+
+            const float s_Radius =
+                s_SpreadRadius * std::sqrt(s_NormalizedIndex);
+
+            const float s_Angle =
+                static_cast<float>(s_Teleported) * s_GoldenAngle;
+
+            // Move NPC horizontally around 47
+            s_NewTransform.Trans.x +=
+                std::cos(s_Angle) * s_Radius;
+
+            s_NewTransform.Trans.y +=
+                std::sin(s_Angle) * s_Radius;
+
+            // Teleport this NPC
+            s_ActorSpatialEntity->SetObjectToWorldMatrixFromEditor(
+                s_NewTransform
+            );
+
+            ++s_Teleported;
         }
+    }
+}
     }
 
     ImGui::PopFont();
