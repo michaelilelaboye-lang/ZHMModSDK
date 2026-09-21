@@ -95,7 +95,12 @@ void Player::OnDrawUI(const bool p_HasFocus) {
         ImGui::Checkbox("Rapid fire", &m_IsRapidFireEnabled);
 
         ImGui::Checkbox("One hit kill", &m_IsOneHitKillEnabled);
-
+if (Globals::ActorManager) {
+    ImGui::Checkbox(
+        "Freeze NPC AI",
+        &Globals::ActorManager->m_bDisableAIBehavior
+    );
+}
         static char s_OutfitName[2048] { "" };
         static uint8_t s_CurrentCharacterSetIndex = 0;
         static std::string s_CurrentCharSetCharacterType = "HeroA";
