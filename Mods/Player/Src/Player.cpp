@@ -95,12 +95,7 @@ void Player::OnDrawUI(const bool p_HasFocus) {
         ImGui::Checkbox("Rapid fire", &m_IsRapidFireEnabled);
 
         ImGui::Checkbox("One hit kill", &m_IsOneHitKillEnabled);
-if (Globals::ActorManager) {
-    ImGui::Checkbox(
-        "Freeze NPC AI",
-        &Globals::ActorManager->m_bDisableAIBehavior
-    );
-}
+
         static char s_OutfitName[2048] { "" };
         static uint8_t s_CurrentCharacterSetIndex = 0;
         static std::string s_CurrentCharSetCharacterType = "HeroA";
@@ -468,7 +463,11 @@ if (ImGui::Button("Teleport actors to player")) {
 
             s_NewTransform.Trans.x += s_OffsetX;
             s_NewTransform.Trans.y += s_OffsetY;
-
+            
+Functions::ZHM5BaseCharacter_ActivateRagdoll->Call(
+    s_Actor,
+    false
+);
             // Teleport this NPC immediately.
             s_ActorSpatialEntity->SetObjectToWorldMatrixFromEditor(
                 s_NewTransform
