@@ -7,6 +7,7 @@
 #include <Glacier/ZContentKitManager.h>
 #include <Glacier/ZActor.h>
 #include <Glacier/ZSpatialEntity.h>
+#include <Glacier/ZMorpheme.h>
 #include <Glacier/ZAction.h>
 #include <Glacier/ZHM5CrippleBox.h>
 #include <Glacier/ZModule.h>
@@ -15,24 +16,8 @@
 
 #include <Util/ImGuiUtils.h>
 #include <cmath>
-#include <mutex>
-#include <vector>
 
 #undef min
-
-namespace {
-    struct SActorTeleportTarget {
-        ZEntityRef m_ActorRef;
-        float m_OffsetX;
-        float m_OffsetY;
-    };
-
-    std::mutex g_ActorTeleportMutex;
-    std::vector<SActorTeleportTarget> g_ActorTeleportTargets;
-    int g_ActorTeleportFramesRemaining = 0;
-
-    constexpr int g_ActorTeleportRepeatFrames = 3;
-}
 
 void Player::Init() {
     Hooks::ZEntitySceneContext_ClearScene->AddDetour(this, &Player::OnClearScene);
@@ -413,12 +398,6 @@ if (ImGui::Button("Teleport actors to player")) {
 
         int s_Teleported = 0;
 
-        // Save the NPCs and their offsets so the teleport can be
-        // re-applied for a few simulation frames. This prevents
-        // active locomotion from immediately overwriting the teleport.
-        std::vector<SActorTeleportTarget> s_NewTeleportTargets;
-        s_NewTeleportTargets.reserve(static_cast<size_t>(s_ActorCount));
-
         // Used to distribute NPCs evenly
         constexpr float s_GoldenAngle = 2.39996323f;
 
@@ -443,7 +422,11 @@ if (ImGui::Button("Teleport actors to player")) {
             if (!s_ActorSpatialEntity)
                 continue;
 
-            // Start with 47's transform
+            // Save the NPC's current world transform before moving it.
+            const auto s_OldTransform =
+                s_ActorSpatialEntity->GetObjectToWorldMatrix();
+
+            // Start with 47's transform.
             auto s_NewTransform = s_PlayerTransform;
 
             // Work out where this NPC should be placed
@@ -457,33 +440,44 @@ if (ImGui::Button("Teleport actors to player")) {
             const float s_Angle =
                 static_cast<float>(s_Teleported) * s_GoldenAngle;
 
-            // Move NPC horizontally around 47
-            const float s_OffsetX = std::cos(s_Angle) * s_Radius;
-            const float s_OffsetY = std::sin(s_Angle) * s_Radius;
+            // Move NPC horizontally around 47.
+            const float s_OffsetX =
+                std::cos(s_Angle) * s_Radius;
+
+            const float s_OffsetY =
+                std::sin(s_Angle) * s_Radius;
 
             s_NewTransform.Trans.x += s_OffsetX;
             s_NewTransform.Trans.y += s_OffsetY;
-            
-Functions::ZHM5BaseCharacter_ActivateRagdoll->Call(
-    s_Actor,
-    false
-);
-            // Teleport this NPC immediately.
+
+            // Calculate the full XYZ displacement caused by the teleport.
+            const SVector3 s_TeleportDelta =
+                s_NewTransform.Trans - s_OldTransform.Trans;
+
+            // A moving NPC's Morpheme/root-motion state can remain anchored
+            // around its previous ground-world position. Shift that stored
+            // position by the same displacement as the spatial teleport.
+            ZMorphemeEntity* s_MorphemeEntity =
+                s_Actor->m_pMorphemeEntity.m_entityRef
+                    .QueryInterface<ZMorphemeEntity>();
+
+            if (s_MorphemeEntity) {
+                s_MorphemeEntity->m_postProcessorGroundWorldPosition.x +=
+                    s_TeleportDelta.x;
+
+                s_MorphemeEntity->m_postProcessorGroundWorldPosition.y +=
+                    s_TeleportDelta.y;
+
+                s_MorphemeEntity->m_postProcessorGroundWorldPosition.z +=
+                    s_TeleportDelta.z;
+            }
+
+            // Teleport the NPC's spatial entity.
             s_ActorSpatialEntity->SetObjectToWorldMatrixFromEditor(
                 s_NewTransform
             );
 
-            // Remember this NPC so the game-thread frame hook can
-            // reinforce its new position for the next few frames.
-            s_NewTeleportTargets.push_back({ s_Ref, s_OffsetX, s_OffsetY });
-
             ++s_Teleported;
-        }
-
-        {
-            std::lock_guard<std::mutex> s_Lock(g_ActorTeleportMutex);
-            g_ActorTeleportTargets = s_NewTeleportTargets;
-            g_ActorTeleportFramesRemaining = g_ActorTeleportRepeatFrames;
         }
     }
 }
@@ -738,13 +732,6 @@ DEFINE_PLUGIN_DETOUR(Player, void, OnClearScene, ZEntitySceneContext* th, bool p
     m_IsInfiniteAmmoEnabled = false;
     m_GlobalOutfitKit = {};
 
-    // Never keep actor references across scene changes.
-    {
-        std::lock_guard<std::mutex> s_Lock(g_ActorTeleportMutex);
-        g_ActorTeleportTargets.clear();
-        g_ActorTeleportFramesRemaining = 0;
-    }
-
     return { HookAction::Continue() };
 }
 
@@ -755,54 +742,6 @@ DEFINE_PLUGIN_DETOUR(
     ZSecuritySystemCameraManager* th,
     const SGameUpdateEvent& updateEvent
 ) {
-    // Re-apply recently requested NPC teleports on the simulation update.
-    // This helps moving/running NPCs whose locomotion would otherwise
-    // overwrite a one-frame transform change.
-    std::vector<SActorTeleportTarget> s_TargetsToReapply;
-
-    {
-        std::lock_guard<std::mutex> s_Lock(g_ActorTeleportMutex);
-
-        if (g_ActorTeleportFramesRemaining > 0) {
-            s_TargetsToReapply = g_ActorTeleportTargets;
-            --g_ActorTeleportFramesRemaining;
-
-            if (g_ActorTeleportFramesRemaining == 0) {
-                g_ActorTeleportTargets.clear();
-            }
-        }
-    }
-
-    if (!s_TargetsToReapply.empty()) {
-        const auto s_LocalHitman = SDK()->GetLocalPlayer();
-
-        if (s_LocalHitman) {
-            ZSpatialEntity* s_HitmanSpatialEntity =
-                s_LocalHitman.m_entityRef.QueryInterface<ZSpatialEntity>();
-
-            if (s_HitmanSpatialEntity) {
-                const auto s_PlayerTransform =
-                    s_HitmanSpatialEntity->GetObjectToWorldMatrix();
-
-                for (auto& s_Target : s_TargetsToReapply) {
-                    ZSpatialEntity* s_ActorSpatialEntity =
-                        s_Target.m_ActorRef.QueryInterface<ZSpatialEntity>();
-
-                    if (!s_ActorSpatialEntity)
-                        continue;
-
-                    auto s_NewTransform = s_PlayerTransform;
-                    s_NewTransform.Trans.x += s_Target.m_OffsetX;
-                    s_NewTransform.Trans.y += s_Target.m_OffsetY;
-
-                    s_ActorSpatialEntity->SetObjectToWorldMatrixFromEditor(
-                        s_NewTransform
-                    );
-                }
-            }
-        }
-    }
-
     if (m_IsInvisible) {
         return { HookAction::Return() };
     }
