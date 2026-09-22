@@ -422,11 +422,7 @@ if (ImGui::Button("Teleport actors to player")) {
             if (!s_ActorSpatialEntity)
                 continue;
 
-            // Save the NPC's current world transform before moving it.
-            const auto s_OldTransform =
-                s_ActorSpatialEntity->GetObjectToWorldMatrix();
-
-            // Start with 47's transform.
+            // Start with 47's transform
             auto s_NewTransform = s_PlayerTransform;
 
             // Work out where this NPC should be placed
@@ -440,39 +436,43 @@ if (ImGui::Button("Teleport actors to player")) {
             const float s_Angle =
                 static_cast<float>(s_Teleported) * s_GoldenAngle;
 
-            // Move NPC horizontally around 47.
-            const float s_OffsetX =
+            // Move NPC horizontally around 47
+            s_NewTransform.Trans.x +=
                 std::cos(s_Angle) * s_Radius;
 
-            const float s_OffsetY =
+            s_NewTransform.Trans.y +=
                 std::sin(s_Angle) * s_Radius;
 
-            s_NewTransform.Trans.x += s_OffsetX;
-            s_NewTransform.Trans.y += s_OffsetY;
+            // Get the NPC's current transform before teleporting.
+            const auto s_OldTransform =
+                s_ActorSpatialEntity->GetObjectToWorldMatrix();
 
-            // Calculate the full XYZ displacement caused by the teleport.
-            const SVector3 s_TeleportDelta =
-                s_NewTransform.Trans - s_OldTransform.Trans;
+            // Calculate how far the NPC is being moved in world space.
+            const float s_DeltaX =
+                s_NewTransform.Trans.x - s_OldTransform.Trans.x;
 
-            // A moving NPC's Morpheme/root-motion state can remain anchored
-            // around its previous ground-world position. Shift that stored
-            // position by the same displacement as the spatial teleport.
-            ZMorphemeEntity* s_MorphemeEntity =
-                s_Actor->m_pMorphemeEntity.m_entityRef
-                    .QueryInterface<ZMorphemeEntity>();
+            const float s_DeltaY =
+                s_NewTransform.Trans.y - s_OldTransform.Trans.y;
 
-            if (s_MorphemeEntity) {
-                s_MorphemeEntity->m_postProcessorGroundWorldPosition.x +=
-                    s_TeleportDelta.x;
+            const float s_DeltaZ =
+                s_NewTransform.Trans.z - s_OldTransform.Trans.z;
 
-                s_MorphemeEntity->m_postProcessorGroundWorldPosition.y +=
-                    s_TeleportDelta.y;
+            // Experimental: keep Morpheme/root-motion's ground-world position
+            // synchronized with the spatial teleport.  Do not change the
+            // ground-world offset here; its write semantics are not known.
+            if (s_Actor->m_pMorphemeEntity) {
+                auto* s_MorphemeEntity = static_cast<ZMorphemeEntity*>(
+                    s_Actor->m_pMorphemeEntity.m_entityRef.GetEntity()
+                );
 
-                s_MorphemeEntity->m_postProcessorGroundWorldPosition.z +=
-                    s_TeleportDelta.z;
+                if (s_MorphemeEntity) {
+                    s_MorphemeEntity->m_postProcessorGroundWorldPosition.x += s_DeltaX;
+                    s_MorphemeEntity->m_postProcessorGroundWorldPosition.y += s_DeltaY;
+                    s_MorphemeEntity->m_postProcessorGroundWorldPosition.z += s_DeltaZ;
+                }
             }
 
-            // Teleport the NPC's spatial entity.
+            // Teleport this NPC's spatial transform.
             s_ActorSpatialEntity->SetObjectToWorldMatrixFromEditor(
                 s_NewTransform
             );
